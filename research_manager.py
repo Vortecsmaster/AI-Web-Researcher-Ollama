@@ -7,6 +7,7 @@ import json
 import logging
 import curses
 import signal
+import csv
 from typing import List, Dict, Set, Optional, Tuple, Union
 from dataclasses import dataclass
 from queue import Queue
@@ -19,6 +20,7 @@ import tty
 from threading import Event
 from urllib.parse import urlparse
 from pathlib import Path
+from people_extractor import extract_people_info, PersonInfo
 
 # Initialize colorama for cross-platform color support
 if os.name == 'nt':  # Windows-specific initialization
@@ -619,6 +621,7 @@ class ResearchManager:
 
         # Initialize document paths
         self.document_path = None
+        self.people_csv_path = None
         self.session_files = []
 
         # Initialize UI and parser
@@ -793,6 +796,7 @@ Do not provide any additional information or explanation, note that the time ran
             # Determine next session number
             next_session = 1 if not self.session_files else max(self.session_files) + 1
             self.document_path = f"research_session_{next_session}.txt"
+            self.people_csv_path = f"research_people_{next_session}.csv"
 
             # Initialize the new document
             with open(self.document_path, 'w', encoding='utf-8') as f:
@@ -802,6 +806,14 @@ Do not provide any additional information or explanation, note that the time ran
                 f.write("="*80 + "\n\n")
                 f.flush()
 
+            # Initialize the people CSV with header
+            try:
+                with open(self.people_csv_path, 'w', encoding='utf-8', newline='') as cf:
+                    writer = csv.writer(cf)
+                    writer.writerow(["name", "expertise", "social_media", "email", "company", "degree"])
+            except Exception as ce:
+                logger.error(f"Error initializing people CSV: {str(ce)}")
+
         except Exception as e:
             logger.error(f"Error initializing document: {str(e)}")
             self.document_path = "research_findings.txt"
@@ -810,8 +822,9 @@ Do not provide any additional information or explanation, note that the time ran
                 f.flush()
 
     def add_to_document(self, content: str, source_url: str, focus_area: str):
-        """Add research findings to current session document"""
+        """Add research findings to current session document and extract people info to CSV."""
         try:
+            wrote_block = False
             with open(self.document_path, 'a', encoding='utf-8') as f:
                 if source_url not in self.searched_urls:
                     f.write(f"\n{'='*80}\n")
@@ -821,10 +834,49 @@ Do not provide any additional information or explanation, note that the time ran
                     f.write(f"{'='*80}\n")
                     f.flush()
                     self.searched_urls.add(source_url)
+                    wrote_block = True
                     self.ui.update_output(f"Added content from: {source_url}")
+
+            # If we wrote a new block, attempt to extract and append people info
+            if wrote_block:
+                self.add_people_to_csv(content)
         except Exception as e:
             logger.error(f"Error adding to document: {str(e)}")
             self.ui.update_output(f"Error saving content: {str(e)}")
+
+    def add_people_to_csv(self, content: str):
+        """Extract people info from content and append to the session CSV.
+        Columns: name, expertise, social_media, email, company, degree
+        """
+        try:
+            if not self.people_csv_path:
+                return
+            people = extract_people_info(content)
+            if not people:
+                return
+
+            # Deduplicate by (name, email, company) within this write by reading existing rows
+            existing_keys = set()
+            if os.path.exists(self.people_csv_path):
+                try:
+                    import csv as _csv
+                    with open(self.people_csv_path, 'r', encoding='utf-8', newline='') as cf:
+                        reader = _csv.DictReader(cf)
+                        for row in reader:
+                            key = (row.get('name','').strip().lower(), row.get('email','').strip().lower(), row.get('company','').strip().lower())
+                            existing_keys.add(key)
+                except Exception:
+                    pass
+
+            with open(self.people_csv_path, 'a', encoding='utf-8', newline='') as cf:
+                writer = csv.writer(cf)
+                for p in people:
+                    key = (p.name.strip().lower(), p.email.strip().lower(), p.company.strip().lower())
+                    if key in existing_keys:
+                        continue
+                    writer.writerow([p.name, p.expertise, p.social_media, p.email, p.company, p.degree])
+        except Exception as e:
+            logger.error(f"Error writing people CSV: {str(e)}")
 
     def _process_search_results(self, results: Dict[str, str], focus_area: str):
         """Process and store search results"""
