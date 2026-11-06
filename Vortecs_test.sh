@@ -1,0 +1,12 @@
+ ./build/bin/llama-server \
+    -m ./models/Qwen3-8B-Q4_K_M.gguf \
+    -c 4096 \
+    -t 4 \
+    -b 128 \
+  --device none \
+  --n-gpu-layers 0 \
+  --parallel 1 \
+--host 0.0.0.0 \
+--port 8080 \
+--jinja \
+--api-key rceX1M2g2!
